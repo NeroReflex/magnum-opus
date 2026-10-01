@@ -115,11 +115,72 @@ fn find_package(name: &str) -> Vec<PathBuf> {
 #[cfg(not(all(target_os = "linux", feature = "linux-pkg-config")))]
 fn find_package(name: &str) -> Vec<PathBuf> {
     if let Ok(vcpkg_root) = std::env::var("VCPKG_ROOT") {
-        vec![link_vcpkg(vcpkg_root.into(), name)]
-    } else {
-        // Try using homebrew
-        vec![link_homebrew_m1(name)]
+        return vec![link_vcpkg(vcpkg_root.into(), name)];
     }
+    if std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref() == Some("linux") {
+        return link_linux_system(name);
+    }
+    vec![link_homebrew_m1(name)]
+}
+
+#[cfg(not(feature = "linux-pkg-config"))]
+fn link_linux_system(name: &str) -> Vec<PathBuf> {
+    let includes = pkg_config_includes(name).unwrap_or_else(|| {
+        panic!(
+            "unable to find '{name}' development headers with pkg-config. \
+             Install '{name}-dev' (libopus-dev), or set VCPKG_ROOT."
+        )
+    });
+    if let Some(dir) = pkg_config_libdir(name) {
+        if !dir.is_empty() {
+            println!("cargo:rustc-link-search=native={dir}");
+        }
+    }
+    println!("cargo:rustc-link-lib=dylib={name}");
+    includes
+}
+
+#[cfg(not(feature = "linux-pkg-config"))]
+fn pkg_config_includes(name: &str) -> Option<Vec<PathBuf>> {
+    let exists = std::process::Command::new("pkg-config")
+        .args(["--exists", name])
+        .status()
+        .ok()?;
+    if !exists.success() {
+        return None;
+    }
+    let output = std::process::Command::new("pkg-config")
+        .args(["--cflags-only-I", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(
+        text.split_whitespace()
+            .filter_map(|part| part.strip_prefix("-I"))
+            .map(PathBuf::from)
+            .collect(),
+    )
+}
+
+#[cfg(not(feature = "linux-pkg-config"))]
+fn pkg_config_libdir(name: &str) -> Option<String> {
+    let output = std::process::Command::new("pkg-config")
+        .args(["--libs-only-L", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for part in text.split_whitespace() {
+        if let Some(dir) = part.strip_prefix("-L") {
+            return Some(dir.to_owned());
+        }
+    }
+    Some(String::new())
 }
 
 fn generate_bindings(ffi_header: &Path, include_paths: &[PathBuf], ffi_rs: &Path) {

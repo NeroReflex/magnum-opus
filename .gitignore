@@ -1,2 +1,5 @@
 target
 Cargo.lock
+
+# Bindgen output, if written beside the crate. src/opus_ffi.rs is source.
+/generated/opus_ffi.rs
